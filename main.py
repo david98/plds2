@@ -93,11 +93,14 @@ class PLDS:
     def on_power_back(self):
         if self.current_status is not Status.NORMAL:
             self.current_status = Status.NORMAL
-            now = datetime.now()
-            logging.warning('Power came back. Outage duration: '
-                            f'{(now - self.last_outage_time).strftime("%H:%M:%S")}')
+            duration = datetime.now() - self.last_outage_time
+            seconds = duration.total_seconds()
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            seconds = round(seconds % 60)
+            logging.warning(f'Power came back. Outage duration: {hours:02d}h:{minutes:02d}m:{seconds:02d}s')
             self.telegram_bot.send_notification('Power came back. Outage duration: '
-                                                f'{(now - self.last_outage_time).strftime("%H:%M:%S")}')
+                                                f'{hours:02d}h:{minutes:02d}m:{seconds:02d}s')
 
     def on_connection_lost(self):
         logging.error('Sensor disconnected.')
