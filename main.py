@@ -5,6 +5,7 @@ import logging
 import config as cfg
 from enum import Enum
 import time
+from datetime import datetime
 
 from telegram.ext import Updater, CommandHandler
 
@@ -69,6 +70,7 @@ class PLDS:
         self.ser = None
         self.telegram_bot = TelegramBot(['status'], self)
         self.version = '2.0.0'
+        self.last_outage_time = None
 
     def status(self, update, context):
         if update.message.from_user.username in cfg.allowed_usernames:
@@ -83,16 +85,19 @@ class PLDS:
     def on_power_outage(self):
         if self.current_status is not Status.ALARM:
             self.current_status = Status.ALARM
+            self.last_outage_time = datetime.now()
             logging.warning('Power outage detected.')
-            self.telegram_bot.send_notification('Power outage detected.')
-        pass
+            self.telegram_bot.send_notification('Power outage detected at '
+                                                f'{self.last_outage_time.strftime("%d/%m/%Y, %H:%M:%S")}')
 
     def on_power_back(self):
         if self.current_status is not Status.NORMAL:
             self.current_status = Status.NORMAL
-            logging.warning('Power came back.')
-            self.telegram_bot.send_notification('Power came back.')
-        pass
+            now = datetime.now()
+            logging.warning('Power came back. Outage duration: '
+                            f'{(now - self.last_outage_time).strftime("%H:%M:%S")}')
+            self.telegram_bot.send_notification('Power came back. Outage duration: '
+                                                f'{(now - self.last_outage_time).strftime("%H:%M:%S")}')
 
     def on_connection_lost(self):
         logging.error('Sensor disconnected.')
