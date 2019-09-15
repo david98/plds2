@@ -74,13 +74,22 @@ class PLDS:
 
     def status(self, update, context):
         if update.message.from_user.username in cfg.allowed_usernames:
+            message = f'PLDS version {self.version}\n'
             if self.current_status is Status.ALARM:
-                pass
+                duration = datetime.now() - self.last_outage_time
+                seconds = duration.total_seconds()
+                hours = int(seconds // 3600)
+                minutes = int((seconds % 3600) // 60)
+                seconds = round(seconds % 60)
+                message += f'Power has been down for {hours:02d}h:{minutes:02d}m:{seconds:02d}s'
             elif self.current_status is Status.NORMAL:
-                pass
+                message += 'No problem here.' if self.last_outage_time is None else \
+                            f'No outage since {self.last_outage_time.strftime("%d/%m/%Y, %H:%M:%S")}'
             elif self.current_status is Status.NO_SENSOR:
-                context.bot.send_message(chat_id=update.message.chat_id,
-                                         text=f'PLDS version {self.version}: {str(self.current_status)}')
+                message += 'Sensor is currently disconnected.'
+
+            context.bot.send_message(chat_id=update.message.chat_id,
+                                     text=message)
 
     def on_power_outage(self):
         if self.current_status is not Status.ALARM:
