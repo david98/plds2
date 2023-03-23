@@ -1,23 +1,27 @@
+import os
+
 import serial
 import pyudev
 import usb.core
 import logging
-import config as cfg
 from enum import Enum
 import time
 from datetime import datetime
 
 from telegram.ext import Updater, CommandHandler
 
+from config import PLDSConfig
+
 
 class USBDetector:
 
-    def __init__(self, vendor_id: int, on_detection):
+    def __init__(self, vendor_id: int, on_detection, check_period: int):
         self.context = pyudev.Context()
         self.monitor = pyudev.Monitor.from_netlink(self.context)
         self.monitor.filter_by(subsystem='usb')
         self.vendor_id = vendor_id
         self.on_detection = on_detection
+        self.check_period = check_period
 
     def listen(self):
         for device in iter(self.monitor.poll, None):
@@ -26,13 +30,16 @@ class USBDetector:
                 if dev is not None:
                     logging.debug('USB Detector: new USB device detected.')
                     self.on_detection()
-            time.sleep(cfg.time_between_usb_checks)
+            time.sleep(self.check_period)
 
 
 class TelegramBot:
 
-    def __init__(self, commands: list, executor):
-        self.updater = Updater(token=cfg.telegram_bot_key, use_context=True)
+    def __init__(self, commands: list, executor, bot_key: str,
+                 allowed_usernames: [str], notification_chat_ids: [str]):
+        self.allowed_usernames = allowed_usernames
+        self.notification_chat_ids = notification_chat_ids
+        self.updater = Updater(token=bot_key, use_context=True)
         self.start_handler = CommandHandler('start', self.start)
         self.updater.dispatcher.add_handler(self.start_handler)
         for command in commands:
@@ -41,11 +48,11 @@ class TelegramBot:
         self.updater.start_polling()
 
     def start(self, update, context):
-        if update.message.from_user.username in cfg.allowed_usernames:
+        if update.message.from_user.username in self.allowed_usernames:
             context.bot.send_message(chat_id=update.message.chat_id, text="Hi there!")
 
     def send_notification(self, message: str):
-        for chat_id in cfg.notification_chat_ids:
+        for chat_id in self.notification_chat_ids:
             self.updater.bot.send_message(chat_id, message)
 
 
@@ -55,25 +62,33 @@ class Status(Enum):
     NO_SENSOR = 2
 
     def __str__(self):
-        if self.value is 0:
+        if self.value == 0:
             return 'No problem.'
-        elif self.value is 1:
+        elif self.value == 1:
             return 'We have a bit of a problem (cit.): no power'
-        elif self.value is 2:
+        elif self.value == 2:
             return 'Sensor is not connected...'
 
 
 class PLDS:
 
-    def __init__(self):
+    def __init__(self, cfg: PLDSConfig):
+        self.serial_device = cfg.serial_device
+        self.baud_rate = cfg.baud_rate
+        self.arduino_vendor_id = cfg.arduino_vendor_id
+        self.max_msg_length = cfg.max_msg_length
+        self.power_outage_string = cfg.power_outage_string
+        self.power_back_string = cfg.power_back_string
+        self.allowed_usernames = cfg.allowed_usernames
         self.current_status: Status = Status.NO_SENSOR
         self.ser = None
-        self.telegram_bot = TelegramBot(['status'], self)
+        self.telegram_bot = TelegramBot(['status'], self, allowed_usernames=cfg.allowed_usernames,
+                                        notification_chat_ids=cfg.notification_chat_ids, bot_key=cfg.telegram_bot_key)
         self.version = '2.0.0'
         self.last_outage_time = None
 
     def status(self, update, context):
-        if update.message.from_user.username in cfg.allowed_usernames:
+        if update.message.from_user.username in self.allowed_usernames:
             message = f'PLDS version {self.version}\n'
             if self.current_status is Status.ALARM:
                 duration = datetime.now() - self.last_outage_time
@@ -122,10 +137,10 @@ class PLDS:
         if self.current_status is not Status.NO_SENSOR:
             try:
                 while True:
-                    data = str(self.ser.readline(cfg.max_message_length))
-                    if cfg.power_outage_message in data:
+                    data = str(self.ser.readline(self.max_msg_length))
+                    if self.power_outage_string in data:
                         self.on_power_outage()
-                    elif cfg.power_back_message in data:
+                    elif self.power_back_string in data:
                         self.on_power_back()
             except serial.SerialException:
                 self.on_connection_lost()
@@ -134,7 +149,7 @@ class PLDS:
 
     def try_connection(self):
         try:
-            self.ser = serial.Serial(cfg.ser_device, cfg.baud_rate)
+            self.ser = serial.Serial(self.serial_device, self.baud_rate)
             self.current_status = Status.NORMAL
             logging.info('Connection to sensor established.')
             self.telegram_bot.send_notification('Connection to sensor established.')
@@ -145,7 +160,7 @@ class PLDS:
 
     def wait_for_sensor(self):
         logging.debug('Starting USB detector...')
-        detector = USBDetector(cfg.arduino_vendor_id, self.try_connection)
+        detector = USBDetector(self.arduino_vendor_id, self.try_connection, check_period=cfg.usb_check_period)
         detector.listen()
 
     def start(self):
@@ -158,9 +173,9 @@ class PLDS:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(filename=cfg.log_file, level=cfg.log_level, filemode='a+',
-                        format='%(asctime)s - %(levelname)s:: %(message)s')
+    cfg = PLDSConfig()
+    logging.basicConfig(level=cfg.log_level, format='%(asctime)s - %(levelname)s:: %(message)s')
     logging.info('PLDS started.')
-    plds = PLDS()
+    plds = PLDS(cfg=cfg)
     plds.start()
 
